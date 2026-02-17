@@ -1,0 +1,15 @@
+name: polyglotquest-backend
+runtime: nodejs
+build:
+  command: npm install --production
+start:
+  command: node server.js
+env:
+  - key: PORT
+    value: 8080
+  - key: NODE_ENV
+    value: production
+health_check:
+  port: 8080
+  path: /
+  interval: 30
