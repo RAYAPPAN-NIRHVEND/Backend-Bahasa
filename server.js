@@ -20,33 +20,33 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this';
 
 // Middleware
 // CORS Configuration - Allow Netlify frontend
-   const corsOptions = {
-       origin: function (origin, callback) {
-           // Allow requests with no origin (mobile apps, Postman)
-           if (!origin) return callback(null, true);
-           
-           const allowedOrigins = [
-               'https://polyglotquest.netlify.app',
-               'http://localhost:3001',
-               'http://127.0.0.1:3001'
-           ];
-           
-           if (allowedOrigins.indexOf(origin) !== -1 || origin.includes('netlify.app')) {
-               callback(null, true);
-           } else {
-               callback(new Error('Not allowed by CORS'));
-           }
-       },
-       credentials: true,
-       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-       allowedHeaders: ['Content-Type', 'Authorization'],
-       exposedHeaders: ['Content-Type', 'Authorization']
-   };
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Allow requests with no origin (mobile apps, Postman, etc.)
+        if (!origin) return callback(null, true);
+        
+        const allowedOrigins = [
+            'https://polyglotquest.netlify.app',
+            'http://localhost:3001',
+            'http://127.0.0.1:3001'
+        ];
+        
+        if (allowedOrigins.indexOf(origin) !== -1 || origin.includes('netlify.app')) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    exposedHeaders: ['Content-Type', 'Authorization']
+};
 
-   app.use(cors(corsOptions));
+app.use(cors(corsOptions));
 
-   // Handle preflight requests
-   app.options('*', cors(corsOptions));
+// Handle preflight requests
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 // Serve static files dari root folder (untuk admin.html)
