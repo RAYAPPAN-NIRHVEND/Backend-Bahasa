@@ -28,13 +28,18 @@ const corsOptions = {
         const allowedOrigins = [
             'https://polyglotquest.netlify.app',
             'http://localhost:3001',
-            'http://127.0.0.1:3001'
+            'http://localhost:3000',
+            'http://127.0.0.1:3001',
+            'http://127.0.0.1:3000'
         ];
         
-        if (allowedOrigins.indexOf(origin) !== -1 || origin.includes('netlify.app')) {
+        // Allow netlify.app subdomains dan semua origin untuk development
+        if (allowedOrigins.includes(origin) || origin.includes('netlify.app') || origin.includes('netlify')) {
             callback(null, true);
         } else {
-            callback(new Error('Not allowed by CORS'));
+            // Log unknown origins tapi jangan block (untuk debugging)
+            console.log('CORS: Unknown origin:', origin);
+            callback(null, true); // Sementara allow all untuk debugging
         }
     },
     credentials: true,
@@ -808,6 +813,168 @@ function authenticateToken(req, res, next) {
 }
 
 // ============================================================================
+// RESET PASSWORD REQUEST (User)
+// ============================================================================
+app.post('/api/auth/reset-request', async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ error: 'Email harus diisi' });
+
+        const users = await readDB(USERS_FILE);
+        const user = users.find(u => u.email === email);
+
+        if (!user) {
+            // Jangan reveal apakah email terdaftar atau tidak (security)
+            return res.json({ message: 'Jika email terdaftar, permintaan reset telah dikirim ke admin.' });
+        }
+
+        // Create reset request record
+        const resetReq = {
+            id: Date.now().toString(),
+            userId: user.id,
+            userName: user.name,
+            userEmail: user.email,
+            userPhone: user.phone || '-',
+            requestedAt: new Date().toISOString(),
+            status: 'pending'
+        };
+
+        // Save to a reset requests file
+        const RESET_FILE = './database/reset_requests.json';
+        let resets = [];
+        try { resets = JSON.parse(await require('fs').promises.readFile(RESET_FILE, 'utf8')); } catch {}
+        resets.push(resetReq);
+        await require('fs').promises.writeFile(RESET_FILE, JSON.stringify(resets, null, 2));
+
+        // Notify admin by email
+        try {
+            await transporter.sendMail({
+                from: process.env.EMAIL_USER,
+                to: process.env.ADMIN_EMAIL,
+                subject: '🔑 Permintaan Reset Password - PolyglotQuest',
+                html: `
+                    <div style="font-family:Arial,sans-serif;max-width:500px;padding:20px;">
+                        <h2 style="color:#6366f1;">🔑 Permintaan Reset Password</h2>
+                        <p><strong>User:</strong> ${user.name}</p>
+                        <p><strong>Email:</strong> ${user.email}</p>
+                        <p><strong>No. HP:</strong> ${user.phone || '-'}</p>
+                        <p><strong>Waktu:</strong> ${new Date().toLocaleString('id-ID')}</p>
+                        <p>Silakan reset password user ini melalui Admin Panel.</p>
+                        <p><a href="https://polyglotquest.netlify.app/admin.html" style="background:#6366f1;color:white;padding:10px 20px;text-decoration:none;border-radius:8px;display:inline-block;">Buka Admin Panel</a></p>
+                    </div>
+                `
+            });
+        } catch (emailErr) {
+            console.error('Email error:', emailErr);
+        }
+
+        res.json({ message: 'Permintaan reset password telah dikirim ke admin. Admin akan menghubungi kamu dalam 1x24 jam.' });
+    } catch (error) {
+        console.error('Reset request error:', error);
+        res.status(500).json({ error: 'Terjadi kesalahan server' });
+    }
+});
+
+// ============================================================================
+// ADMIN: GET ALL USERS
+// ============================================================================
+app.get('/api/admin/users', async (req, res) => {
+    try {
+        const users = await readDB(USERS_FILE);
+        // Return users dengan password hash (untuk admin panel)
+        const usersData = users.map(u => ({
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            phone: u.phone || '-',
+            password: u.password, // hash only
+            freeTrials: u.freeTrials,
+            points: u.points,
+            createdAt: u.createdAt,
+            verified: u.verified
+        }));
+        // Sort terbaru dulu
+        usersData.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        res.json(usersData);
+    } catch (error) {
+        res.status(500).json({ error: 'Terjadi kesalahan server' });
+    }
+});
+
+// ============================================================================
+// ADMIN: GANTI PASSWORD USER
+// ============================================================================
+app.post('/api/admin/users/:userId/password', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { newPassword } = req.body;
+
+        if (!newPassword || newPassword.length < 8) {
+            return res.status(400).json({ error: 'Password minimal 8 karakter' });
+        }
+
+        const users = await readDB(USERS_FILE);
+        const userIndex = users.findIndex(u => u.id === userId);
+
+        if (userIndex === -1) {
+            return res.status(404).json({ error: 'User tidak ditemukan' });
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        users[userIndex].password = hashedPassword;
+        await writeDB(USERS_FILE, users);
+
+        // Notify user by email
+        try {
+            await transporter.sendMail({
+                from: process.env.EMAIL_USER,
+                to: users[userIndex].email,
+                subject: '🔑 Password Akun PolyglotQuest Telah Direset',
+                html: `
+                    <div style="font-family:Arial,sans-serif;max-width:500px;padding:20px;">
+                        <h2 style="color:#6366f1;">🔑 Password Berhasil Direset</h2>
+                        <p>Halo <strong>${users[userIndex].name}</strong>,</p>
+                        <p>Password akun PolyglotQuest kamu telah berhasil direset oleh admin.</p>
+                        <div style="background:#f3f4f6;padding:16px;border-radius:8px;margin:16px 0;">
+                            <p style="margin:0;"><strong>Password Baru:</strong> <code style="background:#e5e7eb;padding:2px 8px;border-radius:4px;">${newPassword}</code></p>
+                        </div>
+                        <p>Segera login dan ganti password kamu ke yang lebih aman.</p>
+                        <p><a href="https://polyglotquest.netlify.app" style="background:#6366f1;color:white;padding:10px 20px;text-decoration:none;border-radius:8px;display:inline-block;">Login Sekarang</a></p>
+                    </div>
+                `
+            });
+        } catch (emailErr) {
+            console.error('Email notification error:', emailErr);
+        }
+
+        res.json({ message: 'Password berhasil diganti', userId });
+    } catch (error) {
+        console.error('Change password error:', error);
+        res.status(500).json({ error: 'Terjadi kesalahan server' });
+    }
+});
+
+// ============================================================================
+// ADMIN: TAMBAH TRIAL USER
+// ============================================================================
+app.post('/api/admin/users/:userId/add-trial', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const users = await readDB(USERS_FILE);
+        const userIndex = users.findIndex(u => u.id === userId);
+
+        if (userIndex === -1) return res.status(404).json({ error: 'User tidak ditemukan' });
+
+        users[userIndex].freeTrials = (users[userIndex].freeTrials || 0) + 1;
+        await writeDB(USERS_FILE, users);
+
+        res.json({ message: 'Trial berhasil ditambahkan', freeTrials: users[userIndex].freeTrials });
+    } catch (error) {
+        res.status(500).json({ error: 'Terjadi kesalahan server' });
+    }
+});
+
+// ============================================================================
 // START SERVER
 // ============================================================================
 
@@ -815,25 +982,32 @@ initDB().then(() => {
     app.listen(PORT, '0.0.0.0', () => {
         console.log(`
 ╔════════════════════════════════════════╗
-║     PolyglotQuest Backend API          ║
-║     Server berjalan di port ${PORT}       ║
+║     PolyglotQuest Backend API v2.1     ║
+║     Port: ${PORT}                         ║
 ╚════════════════════════════════════════╝
 
-API Endpoints:
-- POST   /api/auth/register
-- POST   /api/auth/login
-- GET    /api/auth/me
-- GET    /api/progress
-- POST   /api/progress
-- POST   /api/payments
-- GET    /api/payments/user
-- GET    /api/admin/payments/pending
-- GET    /api/admin/payments/all
-- POST   /api/admin/payments/:id/approve
-- POST   /api/admin/payments/:id/reject
+AUTH:
+- POST /api/auth/register
+- POST /api/auth/login
+- GET  /api/auth/me
+- POST /api/auth/reset-request
 
-Admin Panel: http://localhost:${PORT}/admin.html
-        `);
+GAME:
+- GET  /api/progress
+- POST /api/progress
+- POST /api/payments
+- GET  /api/payments/user
+- POST /api/payment/submit
+
+ADMIN:
+- GET  /api/admin/users
+- POST /api/admin/users/:id/password
+- POST /api/admin/users/:id/add-trial
+- GET  /api/admin/payments/pending
+- GET  /api/admin/payments/all
+- POST /api/admin/payments/:id/approve
+- POST /api/admin/payments/:id/reject
+        `)
     });
 });
 
